@@ -15,22 +15,25 @@ if (!file_exists('uploads/materials')) {
 
 // Upload new material
 if (isset($_POST['upload'])) {
-    $title = trim($_POST['title']);
-    $subject = trim($_POST['subject']);
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $message = "Invalid security token. Please refresh the page and try again.";
+    } else {
+    $title = trim($_POST['title'] ?? '');
+    $subject = trim($_POST['subject'] ?? '');
 
     if ($title != "" && $subject != "" && isset($_FILES['pdf_file'])) {
         $file_name = $_FILES['pdf_file']['name'];
         $file_tmp  = $_FILES['pdf_file']['tmp_name'];
         $file_ext  = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
 
-        if ($file_ext == "pdf") {
-            $new_name = time() . "_" . $file_name;
+        if ($file_ext === "pdf" && ($_FILES['pdf_file']['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK && is_uploaded_file($file_tmp) && mime_content_type($file_tmp) === 'application/pdf') {
+            $new_name = bin2hex(random_bytes(12)) . ".pdf";
             $file_path = "uploads/materials/" . $new_name;
 
             if (move_uploaded_file($file_tmp, $file_path)) {
-                $sql = "INSERT INTO study_materials (title, subject, file_path) 
-                        VALUES ('$title', '$subject', '$file_path')";
-                mysqli_query($conn, $sql);
+                $stmt = $conn->prepare("INSERT INTO study_materials (title, subject, file_path) VALUES (?, ?, ?)");
+                $stmt->bind_param('sss', $title, $subject, $file_path);
+                $stmt->execute();
                 $message = "PDF uploaded successfully!";
             } else {
                 $message = "Failed to upload file.";
@@ -38,27 +41,43 @@ if (isset($_POST['upload'])) {
         } else {
             $message = "Only PDF files are allowed.";
         }
+    } else {
+        $message = "Please provide a title, subject, and PDF file.";
+    }
     }
 }
 
 // Delete material
-if (isset($_GET['delete'])) {
-    $id = intval($_GET['delete']);
-    
-    // Get file path to delete the actual file
-    $res = mysqli_query($conn, "SELECT file_path FROM study_materials WHERE id = $id");
-    $row = mysqli_fetch_assoc($res);
-    if ($row && file_exists($row['file_path'])) {
-        unlink($row['file_path']);
+if (isset($_POST['delete'])) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        http_response_code(400);
+        exit('Invalid security token. Please reload the page and try again.');
     }
 
-    mysqli_query($conn, "DELETE FROM study_materials WHERE id = $id");
+    $id = (int)$_POST['delete'];
+
+    // Get file path to delete the actual file
+    $select_stmt = $conn->prepare("SELECT file_path FROM study_materials WHERE id = ? LIMIT 1");
+    $select_stmt->bind_param('i', $id);
+    $select_stmt->execute();
+    $row = $select_stmt->get_result()->fetch_assoc();
+    if ($row) {
+        $materials_dir = realpath(__DIR__ . '/uploads/materials');
+        $file_path = realpath(__DIR__ . '/' . $row['file_path']);
+        if ($materials_dir !== false && $file_path !== false && str_starts_with($file_path, $materials_dir . DIRECTORY_SEPARATOR) && is_file($file_path)) {
+            unlink($file_path);
+        }
+    }
+
+    $delete_stmt = $conn->prepare("DELETE FROM study_materials WHERE id = ?");
+    $delete_stmt->bind_param('i', $id);
+    $delete_stmt->execute();
     header("Location: admin_materials.php");
     exit();
 }
 
 // Fetch all materials
-$materials = mysqli_query($conn, "SELECT * FROM study_materials ORDER BY uploaded_at DESC");
+$materials = $conn->query("SELECT * FROM study_materials ORDER BY uploaded_at DESC");
 ?>
 
 <!DOCTYPE html>
@@ -187,12 +206,13 @@ $materials = mysqli_query($conn, "SELECT * FROM study_materials ORDER BY uploade
     </div>
 
     <?php if ($message != "") { ?>
-        <div class="message"><?php echo $message; ?></div>
+        <div class="message"><?php echo htmlspecialchars($message); ?></div>
     <?php } ?>
 
     <div class="form-box">
         <h3 style="color:#00d4ff; margin-bottom:20px;">Upload New Material (PDF)</h3>
         <form method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
             <label>Title (Example: Chapter 1 Notes + Important Questions)</label>
             <input type="text" name="title" required>
 
@@ -222,8 +242,11 @@ $materials = mysqli_query($conn, "SELECT * FROM study_materials ORDER BY uploade
                 <td><?php echo htmlspecialchars($row['subject']); ?></td>
                 <td><?php echo date("d M Y", strtotime($row['uploaded_at'])); ?></td>
                 <td>
-                    <a href="<?php echo $row['file_path']; ?>" class="download-btn" target="_blank">View / Download</a>
-                    <a href="?delete=<?php echo $row['id']; ?>" class="delete-btn" onclick="return confirm('Delete this material?')">Delete</a>
+                            <a href="<?php echo htmlspecialchars($row['file_path']); ?>" class="download-btn" target="_blank" rel="noopener">View / Download</a>
+                            <form method="POST" class="inline-action-form" onsubmit="return confirm('Delete this material?')">
+                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                                <button type="submit" name="delete" value="<?php echo (int)$row['id']; ?>" class="delete-btn">Delete</button>
+                            </form>
                 </td>
             </tr>
         <?php } ?>

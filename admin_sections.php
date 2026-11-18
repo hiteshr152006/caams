@@ -20,14 +20,14 @@ if (isset($_POST['update_single_section'])) {
         $new_section = trim($_POST['section']);
         $new_semester = isset($_POST['semester']) ? (int)$_POST['semester'] : 1;
 
-        $section_val = ($new_section === "" || $new_section === "Unassigned") ? "NULL" : "'" . mysqli_real_escape_string($conn, $new_section) . "'";
-        
-        $sql = "UPDATE students SET section = $section_val, semester = $new_semester WHERE id = $student_id";
-        if (mysqli_query($conn, $sql)) {
+        $section_val = ($new_section === "" || $new_section === "Unassigned") ? null : $new_section;
+        $stmt = $conn->prepare("UPDATE students SET section = ?, semester = ? WHERE id = ?");
+        $stmt->bind_param('sii', $section_val, $new_semester, $student_id);
+        if ($stmt->execute()) {
             $message = "Section updated successfully for student!";
             $message_type = "message";
         } else {
-            $message = "Error updating section: " . mysqli_error($conn);
+            $message = "Error updating section.";
             $message_type = "error";
         }
     }
@@ -39,23 +39,29 @@ if (isset($_POST['bulk_allot_section'])) {
         $message = "Invalid security token. Please refresh the page and try again.";
         $message_type = "error";
     } else {
-        $selected_students = isset($_POST['selected_students']) ? $_POST['selected_students'] : [];
-        $bulk_section = trim($_POST['bulk_section']);
+        $selected_students = isset($_POST['selected_students']) && is_array($_POST['selected_students']) ? $_POST['selected_students'] : [];
+        $bulk_section = trim($_POST['bulk_section'] ?? '');
 
         if (!empty($selected_students)) {
-            $ids = array_map('intval', $selected_students);
-            $ids_list = implode(',', $ids);
+            $ids = array_values(array_filter(array_map('intval', $selected_students), function ($id) {
+                return $id > 0;
+            }));
             
-            $section_val = ($bulk_section === "" || $bulk_section === "Unassigned") ? "NULL" : "'" . mysqli_real_escape_string($conn, $bulk_section) . "'";
-            $sql = "UPDATE students SET section = $section_val WHERE id IN ($ids_list)";
-            
-            if (mysqli_query($conn, $sql)) {
+            $section_val = ($bulk_section === "" || $bulk_section === "Unassigned") ? null : $bulk_section;
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            if ($ids) {
+                $stmt = execute_prepared_query(
+                    $conn,
+                    "UPDATE students SET section = ? WHERE id IN ($placeholders)",
+                    's' . str_repeat('i', count($ids)),
+                    array_merge([$section_val], $ids)
+                );
                 $count = count($ids);
                 $target_name = ($bulk_section === "" || $bulk_section === "Unassigned") ? "Unassigned" : "Section " . $bulk_section;
                 $message = "Successfully updated $count student(s) to $target_name!";
                 $message_type = "message";
             } else {
-                $message = "Error during bulk update: " . mysqli_error($conn);
+                $message = "Select at least one valid student.";
                 $message_type = "error";
             }
         } else {
@@ -74,32 +80,40 @@ $search_query = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // Build query
 $where_clauses = [];
+$filter_types = '';
+$filter_values = [];
 
 if ($selected_course !== 'all' && $selected_course !== '') {
-    $safe_course = mysqli_real_escape_string($conn, $selected_course);
-    $where_clauses[] = "course = '$safe_course'";
+    $where_clauses[] = 'course = ?';
+    $filter_types .= 's';
+    $filter_values[] = $selected_course;
 }
 
 if ($selected_sem !== 'all' && $selected_sem !== '') {
-    $safe_sem = (int)$selected_sem;
-    $where_clauses[] = "semester = $safe_sem";
+    $where_clauses[] = 'semester = ?';
+    $filter_types .= 'i';
+    $filter_values[] = (int)$selected_sem;
 }
 
 if ($selected_section === 'unassigned') {
     $where_clauses[] = "(section IS NULL OR section = '' OR section = 'Unassigned')";
 } elseif ($selected_section !== 'all' && $selected_section !== '') {
-    $safe_sec = mysqli_real_escape_string($conn, $selected_section);
-    $where_clauses[] = "section = '$safe_sec'";
+    $where_clauses[] = 'section = ?';
+    $filter_types .= 's';
+    $filter_values[] = $selected_section;
 }
 
 if ($selected_status !== 'all' && $selected_status !== '') {
-    $safe_status = mysqli_real_escape_string($conn, $selected_status);
-    $where_clauses[] = "status = '$safe_status'";
+    $where_clauses[] = 'status = ?';
+    $filter_types .= 's';
+    $filter_values[] = $selected_status;
 }
 
 if ($search_query !== '') {
-    $safe_search = mysqli_real_escape_string($conn, $search_query);
-    $where_clauses[] = "(full_name LIKE '%$safe_search%' OR student_id LIKE '%$safe_search%' OR email LIKE '%$safe_search%')";
+    $where_clauses[] = "(full_name LIKE ? OR student_id LIKE ? OR email LIKE ?)";
+    $search_pattern = '%' . $search_query . '%';
+    $filter_types .= 'sss';
+    array_push($filter_values, $search_pattern, $search_pattern, $search_pattern);
 }
 
 $where_sql = "";
@@ -109,21 +123,27 @@ if (count($where_clauses) > 0) {
 
 // Fetch filtered students
 $query = "SELECT * FROM students $where_sql ORDER BY course ASC, semester ASC, section ASC, student_id ASC, id DESC";
-$result = mysqli_query($conn, $query);
+$student_stmt = execute_prepared_query($conn, $query, $filter_types, $filter_values);
+$result = $student_stmt->get_result();
 
 // Fetch overall counts for stat pills based on current Course + Sem filter
 $stat_where = [];
+$stat_types = '';
+$stat_values = [];
 if ($selected_course !== 'all' && $selected_course !== '') {
-    $safe_course = mysqli_real_escape_string($conn, $selected_course);
-    $stat_where[] = "course = '$safe_course'";
+    $stat_where[] = 'course = ?';
+    $stat_types .= 's';
+    $stat_values[] = $selected_course;
 }
 if ($selected_sem !== 'all' && $selected_sem !== '') {
-    $safe_sem = (int)$selected_sem;
-    $stat_where[] = "semester = $safe_sem";
+    $stat_where[] = 'semester = ?';
+    $stat_types .= 'i';
+    $stat_values[] = (int)$selected_sem;
 }
 if ($selected_status !== 'all' && $selected_status !== '') {
-    $safe_status = mysqli_real_escape_string($conn, $selected_status);
-    $stat_where[] = "status = '$safe_status'";
+    $stat_where[] = 'status = ?';
+    $stat_types .= 's';
+    $stat_values[] = $selected_status;
 }
 $stat_sql = count($stat_where) > 0 ? "WHERE " . implode(" AND ", $stat_where) : "";
 
@@ -136,17 +156,16 @@ $counts = [
     'unassigned' => 0
 ];
 
-$count_res = mysqli_query($conn, "SELECT section, COUNT(*) as cnt FROM students $stat_sql GROUP BY section");
-if ($count_res) {
-    while ($c_row = mysqli_fetch_assoc($count_res)) {
-        $sec = $c_row['section'];
-        $cnt = (int)$c_row['cnt'];
-        $counts['total'] += $cnt;
-        if (empty($sec) || $sec === 'Unassigned') {
-            $counts['unassigned'] += $cnt;
-        } elseif (isset($counts[$sec])) {
-            $counts[$sec] += $cnt;
-        }
+$count_stmt = execute_prepared_query($conn, "SELECT section, COUNT(*) as cnt FROM students $stat_sql GROUP BY section", $stat_types, $stat_values);
+$count_res = $count_stmt->get_result();
+while ($c_row = $count_res->fetch_assoc()) {
+    $sec = $c_row['section'];
+    $cnt = (int)$c_row['cnt'];
+    $counts['total'] += $cnt;
+    if (empty($sec) || $sec === 'Unassigned') {
+        $counts['unassigned'] += $cnt;
+    } elseif (isset($counts[$sec])) {
+        $counts[$sec] += $cnt;
     }
 }
 ?>

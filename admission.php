@@ -4,13 +4,16 @@ include 'config.php';
 $message = "";
 
 if (isset($_POST['submit'])) {
-    $full_name = mysqli_real_escape_string($conn, trim($_POST['full_name']));
-    $email     = mysqli_real_escape_string($conn, trim($_POST['email']));
-    $phone     = mysqli_real_escape_string($conn, trim($_POST['phone']));
-    $dob       = mysqli_real_escape_string($conn, trim($_POST['dob']));
-    $gender    = mysqli_real_escape_string($conn, trim($_POST['gender']));
-    $address   = mysqli_real_escape_string($conn, trim($_POST['address']));
-    $course    = mysqli_real_escape_string($conn, trim($_POST['course']));
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $message = "Invalid security token. Please refresh the page and try again.";
+    } else {
+    $full_name = trim($_POST['full_name'] ?? '');
+    $email     = trim($_POST['email'] ?? '');
+    $phone     = trim($_POST['phone'] ?? '');
+    $dob       = trim($_POST['dob'] ?? '');
+    $gender    = trim($_POST['gender'] ?? '');
+    $address   = trim($_POST['address'] ?? '');
+    $course    = trim($_POST['course'] ?? '');
     $semester  = isset($_POST['semester']) ? (int)$_POST['semester'] : 1;
 
     // File upload handling
@@ -55,16 +58,16 @@ if (isset($_POST['submit'])) {
             move_uploaded_file($mark10_tmp, $mark10_path) &&
             move_uploaded_file($mark12_tmp, $mark12_path)) {
 
-            $sql = "INSERT INTO students (full_name, email, phone, dob, gender, address, course, semester, section, photo, marksheet_10th, marksheet_12th) 
-                    VALUES ('$full_name', '$email', '$phone', '$dob', '$gender', '$address', '$course', $semester, NULL, '$photo_path', '$mark10_path', '$mark12_path')";
-
-            if (mysqli_query($conn, $sql)) {
+            $stmt = $conn->prepare("INSERT INTO students (full_name, email, phone, dob, gender, address, course, semester, section, photo, marksheet_10th, marksheet_12th) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)");
+            $stmt->bind_param('sssssssisss', $full_name, $email, $phone, $dob, $gender, $address, $course, $semester, $photo_path, $mark10_path, $mark12_path);
+            if ($stmt->execute()) {
                 $message = "Application submitted successfully! Please wait for admin approval.";
             } else {
-                $message = "Error: " . mysqli_error($conn);
+                $message = "Error: Unable to save your application. Please try again.";
             }
         } else {
             $message = "Error: Failed to upload documents. Please check file sizes and try again.";
+        }
         }
     }
 }
@@ -210,6 +213,7 @@ if (isset($_POST['submit'])) {
         <?php } ?>
 
         <form method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
             <div class="form-group">
                 <label>Full Name</label>
                 <input type="text" name="full_name" required>

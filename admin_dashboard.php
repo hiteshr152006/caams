@@ -9,9 +9,14 @@ if (!isset($_SESSION['admin'])) {
 
 $message = "";
 
+if (isset($_POST['action']) && in_array($_POST['action'], ['approve', 'reject'], true) && !verify_csrf_token($_POST['csrf_token'] ?? '')) {
+    http_response_code(400);
+    exit('Invalid security token. Please return to the dashboard and try again.');
+}
+
 // Approve Student
-if (isset($_GET['approve'])) {
-    $id = (int)$_GET['approve'];
+if (isset($_POST['action']) && $_POST['action'] === 'approve') {
+    $id = (int)($_POST['id'] ?? 0);
 
     // Generate Student ID (Example: STU2024001)
     $student_id = "STU" . date("Y") . str_pad($id, 3, "0", STR_PAD_LEFT);
@@ -28,10 +33,11 @@ if (isset($_GET['approve'])) {
 }
 
 // Reject Student
-if (isset($_GET['reject'])) {
-    $id = (int)$_GET['reject'];
-    $sql = "UPDATE students SET status='Rejected' WHERE id=$id";
-    if (mysqli_query($conn, $sql)) {
+if (isset($_POST['action']) && $_POST['action'] === 'reject') {
+    $id = (int)($_POST['id'] ?? 0);
+    $stmt = $conn->prepare("UPDATE students SET status = 'Rejected' WHERE id = ?");
+    $stmt->bind_param('i', $id);
+    if ($stmt->execute()) {
         header("Location: admin_dashboard.php?msg=rejected");
         exit();
     }
@@ -46,7 +52,7 @@ if (isset($_GET['msg'])) {
 }
 
 // Fetch all students
-$result = mysqli_query($conn, "SELECT * FROM students ORDER BY id DESC");
+$result = $conn->query("SELECT * FROM students ORDER BY id DESC");
 $students_data = [];
 ?>
 
@@ -374,19 +380,17 @@ $students_data = [];
                        <span>🏷️</span> Section
                     </a>
 
-                    <?php if ($row['status'] == 'Pending') { ?>
-                        <a href="admin_dashboard.php?approve=<?php echo $row['id']; ?>" 
-                           class="btn approve" 
-                           onclick="return confirm('Approve admission for <?php echo htmlspecialchars(addslashes($row['full_name'])); ?>?');"
-                           title="Approve Application">
-                           &#x2713;
-                        </a>
-                        <a href="admin_dashboard.php?reject=<?php echo $row['id']; ?>" 
-                           class="btn reject" 
-                           onclick="return confirm('Reject admission for <?php echo htmlspecialchars(addslashes($row['full_name'])); ?>?');"
-                           title="Reject Application">
-                           &times;
-                        </a>
+                    <?php if ($row['status'] === 'Pending') { ?>
+                        <form method="POST" class="inline-action-form" onsubmit="return confirm('Approve this application?');">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                            <input type="hidden" name="id" value="<?php echo (int)$row['id']; ?>">
+                            <button type="submit" name="action" value="approve" class="btn approve" title="Approve Application">&#x2713;</button>
+                        </form>
+                        <form method="POST" class="inline-action-form" onsubmit="return confirm('Reject this application?');">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                            <input type="hidden" name="id" value="<?php echo (int)$row['id']; ?>">
+                            <button type="submit" name="action" value="reject" class="btn reject" title="Reject Application">&times;</button>
+                        </form>
                     <?php } ?>
                 </div>
             </td>
@@ -410,7 +414,8 @@ $students_data = [];
     </div>
 
     <script>
-        const studentsDatabase = <?php echo json_encode($students_data); ?>;
+        const studentsDatabase = <?php echo json_encode($students_data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        const csrfToken = <?php echo json_encode(generate_csrf_token()); ?>;
 
         function openQuickModal(studentId) {
             const student = studentsDatabase[studentId];
@@ -436,16 +441,32 @@ $students_data = [];
             let actionButtonsHtml = '';
             if (student.status === 'Pending') {
                 actionButtonsHtml = `
-                    <a href="admin_dashboard.php?approve=${student.id}" class="btn approve" onclick="return confirm('Approve application?');">&#x2713; Approve Student</a>
-                    <a href="admin_dashboard.php?reject=${student.id}" class="btn reject" onclick="return confirm('Reject application?');">&times; Reject Student</a>
+                    <form method="POST" class="inline-action-form" onsubmit="return confirm('Approve application?');">
+                        <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+                        <input type="hidden" name="id" value="${Number(student.id)}">
+                        <button type="submit" name="action" value="approve" class="btn approve">&#x2713; Approve Student</button>
+                    </form>
+                    <form method="POST" class="inline-action-form" onsubmit="return confirm('Reject application?');">
+                        <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+                        <input type="hidden" name="id" value="${Number(student.id)}">
+                        <button type="submit" name="action" value="reject" class="btn reject">&times; Reject Student</button>
+                    </form>
                 `;
             } else if (student.status === 'Rejected') {
                 actionButtonsHtml = `
-                    <a href="admin_dashboard.php?approve=${student.id}" class="btn approve" onclick="return confirm('Re-approve application?');">&#x2713; Re-Approve Student</a>
+                    <form method="POST" class="inline-action-form" onsubmit="return confirm('Re-approve application?');">
+                        <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+                        <input type="hidden" name="id" value="${Number(student.id)}">
+                        <button type="submit" name="action" value="approve" class="btn approve">&#x2713; Re-Approve Student</button>
+                    </form>
                 `;
             } else if (student.status === 'Approved') {
                 actionButtonsHtml = `
-                    <a href="admin_dashboard.php?reject=${student.id}" class="btn reject" onclick="return confirm('Revoke approval?');">&times; Revoke to Rejected</a>
+                    <form method="POST" class="inline-action-form" onsubmit="return confirm('Revoke approval?');">
+                        <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+                        <input type="hidden" name="id" value="${Number(student.id)}">
+                        <button type="submit" name="action" value="reject" class="btn reject">&times; Revoke to Rejected</button>
+                    </form>
                 `;
             }
 

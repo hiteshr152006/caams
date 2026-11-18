@@ -7,7 +7,7 @@ if (!isset($_SESSION['admin'])) {
     exit();
 }
 
-$id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$id = isset($_GET['id']) ? (int)$_GET['id'] : (int)($_POST['id'] ?? 0);
 $message = "";
 $message_type = "message";
 
@@ -16,11 +16,14 @@ if ($id <= 0) {
     exit();
 }
 
-// Handle Approve Action
-if (isset($_GET['action']) && $_GET['action'] === 'approve') {
+// Handle approve or reject action
+if (isset($_POST['action']) && in_array($_POST['action'], ['approve', 'reject'], true)) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $message = 'Invalid security token. Please refresh the page and try again.';
+        $message_type = 'error';
+    } elseif ($_POST['action'] === 'approve') {
     $student_id = "STU" . date("Y") . str_pad($id, 3, "0", STR_PAD_LEFT);
-    $default_password = 'student123';
-    $hashed_password = password_hash($default_password, PASSWORD_DEFAULT);
+    $hashed_password = password_hash('student123', PASSWORD_DEFAULT);
 
     $stmt = $conn->prepare("UPDATE students SET status='Approved', student_id=?, password=? WHERE id=?");
     $stmt->bind_param('ssi', $student_id, $hashed_password, $id);
@@ -29,20 +32,16 @@ if (isset($_GET['action']) && $_GET['action'] === 'approve') {
         $message = "Application has been Approved successfully! Student ID assigned: " . $student_id;
         $message_type = "message";
     } else {
-        $message = "Database error: " . $conn->error;
+        $message = "Unable to approve the application.";
         $message_type = "error";
     }
-}
-
-// Handle Reject Action
-if (isset($_GET['action']) && $_GET['action'] === 'reject') {
-    $update_sql = "UPDATE students SET status='Rejected' WHERE id=$id";
-    if (mysqli_query($conn, $update_sql)) {
+    } else {
+        $reject_stmt = $conn->prepare("UPDATE students SET status = 'Rejected' WHERE id = ?");
+        $reject_stmt->bind_param('i', $id);
+        if ($reject_stmt->execute()) {
         $message = "Application has been marked as Rejected.";
         $message_type = "error";
-    } else {
-        $message = "Database error: " . mysqli_error($conn);
-        $message_type = "error";
+        }
     }
 }
 
@@ -52,31 +51,31 @@ if (isset($_POST['update_academic'])) {
         $message = "Invalid security token. Please refresh the page and try again.";
         $message_type = "error";
     } else {
-        $up_course = mysqli_real_escape_string($conn, trim($_POST['course']));
-        $up_sem = (int)$_POST['semester'];
-        $up_sec = trim($_POST['section']);
-        $sec_sql = ($up_sec === '' || $up_sec === 'Unassigned') ? "NULL" : "'" . mysqli_real_escape_string($conn, $up_sec) . "'";
-
-        $up_sql = "UPDATE students SET course='$up_course', semester=$up_sem, section=$sec_sql WHERE id=$id";
-        if (mysqli_query($conn, $up_sql)) {
+        $up_course = trim($_POST['course'] ?? '');
+        $up_sem = (int)($_POST['semester'] ?? 1);
+        $up_sec = trim($_POST['section'] ?? '');
+        $section_value = ($up_sec === '' || $up_sec === 'Unassigned') ? null : $up_sec;
+        $up_stmt = $conn->prepare("UPDATE students SET course = ?, semester = ?, section = ? WHERE id = ?");
+        $up_stmt->bind_param('sisi', $up_course, $up_sem, $section_value, $id);
+        if ($up_stmt->execute()) {
             $message = "Academic allocation saved (Course: $up_course, Sem $up_sem, Section: " . ($up_sec ?: 'Not Allotted') . ")!";
             $message_type = "message";
         } else {
-            $message = "Failed to update academic details: " . mysqli_error($conn);
+            $message = "Failed to update academic details.";
             $message_type = "error";
         }
     }
 }
 
 // Fetch student details
-$query = "SELECT * FROM students WHERE id = $id LIMIT 1";
-$result = mysqli_query($conn, $query);
+$student_stmt = $conn->prepare("SELECT * FROM students WHERE id = ? LIMIT 1");
+$student_stmt->bind_param('i', $id);
+$student_stmt->execute();
+$student = $student_stmt->get_result()->fetch_assoc();
 
-if (!$result || mysqli_num_rows($result) === 0) {
+if (!$student) {
     die("Student application not found. <a href='admin_dashboard.php'>Back to Dashboard</a>");
 }
-
-$student = mysqli_fetch_assoc($result);
 
 if (!function_exists('is_pdf_file')) {
     function is_pdf_file($filePath) {
@@ -331,28 +330,28 @@ if (!function_exists('is_pdf_file')) {
             </span>
 
             <?php if ($student['status'] === 'Pending') { ?>
-                <a href="admin_review_student.php?id=<?php echo $student['id']; ?>&action=approve" 
-                   class="btn approve" 
-                   onclick="return confirm('Are you sure you want to approve this student application?');">
-                   &check; Approve Application
-                </a>
-                <a href="admin_review_student.php?id=<?php echo $student['id']; ?>&action=reject" 
-                   class="btn reject" 
-                   onclick="return confirm('Are you sure you want to reject this student application?');">
-                   &times; Reject Application
-                </a>
+                <form method="POST" class="inline-action-form" onsubmit="return confirm('Approve this application?');">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                    <input type="hidden" name="id" value="<?php echo (int)$student['id']; ?>">
+                    <button type="submit" name="action" value="approve" class="btn approve">&check; Approve Application</button>
+                </form>
+                <form method="POST" class="inline-action-form" onsubmit="return confirm('Reject this application?');">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                    <input type="hidden" name="id" value="<?php echo (int)$student['id']; ?>">
+                    <button type="submit" name="action" value="reject" class="btn reject">&times; Reject Application</button>
+                </form>
             <?php } elseif ($student['status'] === 'Rejected') { ?>
-                <a href="admin_review_student.php?id=<?php echo $student['id']; ?>&action=approve" 
-                   class="btn approve" 
-                   onclick="return confirm('Re-approve this application?');">
-                   &check; Re-Approve Application
-                </a>
+                <form method="POST" class="inline-action-form" onsubmit="return confirm('Re-approve this application?');">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                    <input type="hidden" name="id" value="<?php echo (int)$student['id']; ?>">
+                    <button type="submit" name="action" value="approve" class="btn approve">&check; Re-Approve Application</button>
+                </form>
             <?php } elseif ($student['status'] === 'Approved') { ?>
-                <a href="admin_review_student.php?id=<?php echo $student['id']; ?>&action=reject" 
-                   class="btn reject" 
-                   onclick="return confirm('Revert to Rejected?');">
-                   &times; Revoke / Reject
-                </a>
+                <form method="POST" class="inline-action-form" onsubmit="return confirm('Revert to rejected?');">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                    <input type="hidden" name="id" value="<?php echo (int)$student['id']; ?>">
+                    <button type="submit" name="action" value="reject" class="btn reject">&times; Revoke / Reject</button>
+                </form>
             <?php } ?>
         </div>
     </div>

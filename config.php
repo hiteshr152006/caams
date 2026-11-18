@@ -44,6 +44,20 @@ function verify_csrf_token($token) {
     return is_string($token) && is_string($_SESSION['csrf_token'] ?? '') && hash_equals($_SESSION['csrf_token'], $token);
 }
 
+function execute_prepared_query($conn, $sql, $types = '', $params = []) {
+    $stmt = $conn->prepare($sql);
+    if ($types !== '') {
+        $bindings = [$types];
+        foreach ($params as &$param) {
+            $bindings[] = &$param;
+        }
+        call_user_func_array([$stmt, 'bind_param'], $bindings);
+    }
+
+    $stmt->execute();
+    return $stmt;
+}
+
 function get_env_value($key, $default = '') {
     $value = getenv($key);
     if ($value !== false && $value !== null && trim((string)$value) !== '') {
@@ -80,6 +94,28 @@ function get_env_value($key, $default = '') {
     return $default;
 }
 
+function get_app_base_url() {
+    $configured = rtrim(get_env_value('APP_BASE_URL'), '/');
+    if ($configured !== '') {
+        if (filter_var($configured, FILTER_VALIDATE_URL) === false || !in_array(parse_url($configured, PHP_URL_SCHEME), ['http', 'https'], true)) {
+            throw new RuntimeException('APP_BASE_URL must be a valid HTTP or HTTPS URL.');
+        }
+
+        return $configured;
+    }
+
+    $host = $_SERVER['HTTP_HOST'] ?? '';
+    if (!is_string($host) || !preg_match('/\A(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(?::\d{1,5})?\z/', $host)) {
+        throw new RuntimeException('Unable to determine a safe application URL. Set APP_BASE_URL in .env.');
+    }
+
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $directory = str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/'));
+    $directory = $directory === '/' || $directory === '.' ? '' : '/' . trim($directory, '/');
+
+    return $scheme . '://' . $host . $directory;
+}
+
 function is_password_hash($value) {
     if (!is_string($value) || $value === '') {
         return false;
@@ -107,11 +143,12 @@ $db_user = get_env_value('DB_USERNAME', 'root');
 $db_pass = get_env_value('DB_PASSWORD', '');
 $db_name = get_env_value('DB_NAME', 'college_system');
 
-$conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
-
-if ($conn->connect_error) {
-    die('Database connection failed: ' . $conn->connect_error);
+try {
+    $conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
+    $conn->set_charset('utf8mb4');
+} catch (mysqli_sql_exception $e) {
+    error_log('Database connection failed: ' . $e->getMessage());
+    http_response_code(503);
+    exit('Database unavailable. Check the MySQL service and database configuration, then reload the page.');
 }
-
-$conn->set_charset('utf8mb4');
 ?>

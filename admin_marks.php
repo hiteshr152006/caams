@@ -11,7 +11,7 @@ $message_type = "message";
 
 // Get subjects from subjects table if available, else default list
 $db_subjects = [];
-$sub_query = mysqli_query($conn, "SELECT subject_name FROM subjects ORDER BY subject_name");
+$sub_query = $conn->query("SELECT subject_name FROM subjects ORDER BY subject_name");
 if ($sub_query && mysqli_num_rows($sub_query) > 0) {
     while ($s_row = mysqli_fetch_assoc($sub_query)) {
         $db_subjects[] = $s_row['subject_name'];
@@ -35,72 +35,90 @@ $selected_subject = isset($_REQUEST['subject']) ? trim($_REQUEST['subject']) : '
 
 // When marks form is submitted
 if (isset($_POST['submit_marks'])) {
-    $subject = mysqli_real_escape_string($conn, $_POST['subject']);
+    $subject = trim($_POST['subject'] ?? '');
     $ia_array = isset($_POST['ia']) ? $_POST['ia'] : [];
     $lab_array = isset($_POST['lab']) ? $_POST['lab'] : [];
     $sessional_array = isset($_POST['sessional']) ? $_POST['sessional'] : [];
 
-    $count_updated = 0;
-    foreach ($ia_array as $student_id => $ia) {
-        $safe_stu_id = mysqli_real_escape_string($conn, $student_id);
-        $ia_val = floatval($ia);
-        $lab_val = isset($lab_array[$student_id]) ? floatval($lab_array[$student_id]) : 0.00;
-        $sess_val = isset($sessional_array[$student_id]) ? floatval($sessional_array[$student_id]) : 0.00;
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $message = "Invalid security token. Please refresh the page and try again.";
+        $message_type = "error";
+    } elseif ($subject === '' || !is_array($ia_array) || !is_array($lab_array) || !is_array($sessional_array)) {
+        $message = "Please provide a subject and valid marks.";
+        $message_type = "error";
+    } else {
+        $check = $conn->prepare("SELECT id FROM marks WHERE student_id = ? AND subject = ? LIMIT 1");
+        $insert = $conn->prepare("INSERT INTO marks (student_id, subject, ia_marks, lab_marks, sessional_marks) VALUES (?, ?, ?, ?, ?)");
+        $update = $conn->prepare("UPDATE marks SET ia_marks = ?, lab_marks = ?, sessional_marks = ? WHERE student_id = ? AND subject = ?");
+        $count_updated = 0;
+        foreach ($ia_array as $student_id => $ia) {
+            if (!ctype_digit((string)$student_id)) {
+                continue;
+            }
+            $ia_val = (float)$ia;
+            $lab_val = isset($lab_array[$student_id]) ? (float)$lab_array[$student_id] : 0.00;
+            $sess_val = isset($sessional_array[$student_id]) ? (float)$sessional_array[$student_id] : 0.00;
 
-        // Check if marks already exist
-        $check = mysqli_query($conn, "SELECT id FROM marks WHERE student_id='$safe_stu_id' AND subject='$subject'");
-        
-        if (mysqli_num_rows($check) > 0) {
-            $sql = "UPDATE marks SET ia_marks='$ia_val', lab_marks='$lab_val', sessional_marks='$sess_val' 
-                    WHERE student_id='$safe_stu_id' AND subject='$subject'";
-        } else {
-            $sql = "INSERT INTO marks (student_id, subject, ia_marks, lab_marks, sessional_marks) 
-                    VALUES ('$safe_stu_id', '$subject', '$ia_val', '$lab_val', '$sess_val')";
-        }
-        if (mysqli_query($conn, $sql)) {
+            $check->bind_param('ss', $student_id, $subject);
+            $check->execute();
+            $existing = $check->get_result()->fetch_assoc();
+
+            if ($existing) {
+                $update->bind_param('dddss', $ia_val, $lab_val, $sess_val, $student_id, $subject);
+                $update->execute();
+            } else {
+                $insert->bind_param('ssddd', $student_id, $subject, $ia_val, $lab_val, $sess_val);
+                $insert->execute();
+            }
             $count_updated++;
         }
+        $message = "Marks saved successfully for $count_updated student(s) in $subject.";
+        $message_type = "message";
     }
-    $message = "Marks saved successfully for $count_updated student(s) in $subject.";
-    $message_type = "message";
 }
 
 // Build query to fetch students matching selected Course, Sem, and Section
 $where_clauses = ["status = 'Approved'"];
+$filter_types = '';
+$filter_values = [];
 
 if ($selected_course !== 'all' && $selected_course !== '') {
-    $safe_course = mysqli_real_escape_string($conn, $selected_course);
-    $where_clauses[] = "course = '$safe_course'";
+    $where_clauses[] = 'course = ?';
+    $filter_types .= 's';
+    $filter_values[] = $selected_course;
 }
 
 if ($selected_sem !== 'all' && $selected_sem !== '') {
-    $safe_sem = (int)$selected_sem;
-    $where_clauses[] = "semester = $safe_sem";
+    $where_clauses[] = 'semester = ?';
+    $filter_types .= 'i';
+    $filter_values[] = (int)$selected_sem;
 }
 
 if ($selected_section === 'unassigned') {
     $where_clauses[] = "(section IS NULL OR section = '' OR section = 'Unassigned')";
 } elseif ($selected_section !== 'all' && $selected_section !== '') {
-    $safe_sec = mysqli_real_escape_string($conn, $selected_section);
-    $where_clauses[] = "section = '$safe_sec'";
+    $where_clauses[] = 'section = ?';
+    $filter_types .= 's';
+    $filter_values[] = $selected_section;
 }
 
 $where_sql = "WHERE " . implode(" AND ", $where_clauses);
-$students = mysqli_query($conn, "SELECT * FROM students $where_sql ORDER BY course ASC, semester ASC, section ASC, student_id ASC");
+$students_stmt = execute_prepared_query($conn, "SELECT * FROM students $where_sql ORDER BY course ASC, semester ASC, section ASC, student_id ASC", $filter_types, $filter_values);
+$students = $students_stmt->get_result();
 
 // Fetch existing marks for selected subject to pre-fill inputs
 $existing_marks = [];
 if (!empty($selected_subject)) {
-    $safe_s = mysqli_real_escape_string($conn, $selected_subject);
-    $marks_res = mysqli_query($conn, "SELECT student_id, ia_marks, lab_marks, sessional_marks FROM marks WHERE subject='$safe_s'");
-    if ($marks_res) {
-        while ($m_row = mysqli_fetch_assoc($marks_res)) {
-            $existing_marks[$m_row['student_id']] = [
-                'ia' => $m_row['ia_marks'],
-                'lab' => $m_row['lab_marks'],
-                'sessional' => $m_row['sessional_marks']
-            ];
-        }
+    $marks_stmt = $conn->prepare("SELECT student_id, ia_marks, lab_marks, sessional_marks FROM marks WHERE subject = ?");
+    $marks_stmt->bind_param('s', $selected_subject);
+    $marks_stmt->execute();
+    $marks_res = $marks_stmt->get_result();
+    while ($m_row = $marks_res->fetch_assoc()) {
+        $existing_marks[$m_row['student_id']] = [
+            'ia' => $m_row['ia_marks'],
+            'lab' => $m_row['lab_marks'],
+            'sessional' => $m_row['sessional_marks']
+        ];
     }
 }
 ?>
@@ -388,6 +406,7 @@ if (!empty($selected_subject)) {
     if ($total_students > 0 && !empty($selected_subject)) {
     ?>
         <form method="POST" action="admin_marks.php?course=<?php echo urlencode($selected_course); ?>&sem=<?php echo urlencode($selected_sem); ?>&section=<?php echo urlencode($selected_section); ?>&subject=<?php echo urlencode($selected_subject); ?>">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
             <input type="hidden" name="subject" value="<?php echo htmlspecialchars($selected_subject); ?>">
 
             <div style="margin-bottom: 14px; color: #94a3b8; font-size: 0.9rem;">

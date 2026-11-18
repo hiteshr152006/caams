@@ -506,6 +506,138 @@ html, body {
     flex-wrap: wrap;
 }
 
+.inline-action-form {
+    display: inline-flex;
+    margin: 0;
+}
+
+.delete-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    cursor: pointer;
+    font: inherit;
+}
+
+.student-view-page {
+    display: grid;
+    place-items: center;
+    padding: 24px 16px;
+    background: radial-gradient(ellipse at top, #172554 0%, var(--bg) 62%);
+}
+
+.student-view-card {
+    width: min(100%, 440px);
+    padding: 32px;
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    border-radius: 20px;
+    background: linear-gradient(155deg, #172033, #0d1422);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.4);
+    text-align: center;
+}
+
+.student-view-label,
+.student-view-note {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.student-view-label {
+    margin-bottom: 22px;
+}
+
+.student-view-photo {
+    width: 116px;
+    height: 116px;
+    margin: 0 auto 16px;
+    border: 3px solid #38bdf8;
+    border-radius: 18px;
+    object-fit: cover;
+}
+
+.student-view-placeholder {
+    display: grid;
+    place-items: center;
+    background: #1e293b;
+    color: #94a3b8;
+    font-weight: 700;
+}
+
+.student-view-card h1 {
+    margin-bottom: 20px;
+    color: #7dd3fc;
+    font-size: 1.55rem;
+}
+
+.student-view-card > p:not(.student-view-label):not(.student-view-note) {
+    margin: 9px 0;
+    color: #cbd5e1;
+}
+
+.student-view-card strong {
+    color: white;
+}
+
+.student-view-note {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+
+.id-card {
+    width: 350px;
+    max-width: 100%;
+    text-align: center;
+    background: linear-gradient(145deg, #1a1a1a, #111);
+    border: 2px solid #00d4ff;
+}
+
+.id-card img.photo,
+.id-card .photo-placeholder {
+    width: 110px;
+    height: 110px;
+    margin: 0 auto 15px;
+    border: 3px solid #00d4ff;
+    border-radius: 10px;
+    object-fit: cover;
+}
+
+.id-card .photo-placeholder {
+    background: #333;
+    color: #777;
+    line-height: 104px;
+}
+
+.id-card h3 {
+    margin-bottom: 5px;
+    color: #00d4ff;
+}
+
+.id-card p {
+    margin: 4px 0;
+    color: #ccc;
+    font-size: 0.95rem;
+}
+
+.id-card .qr {
+    margin-top: 20px;
+}
+
+.id-card .qr-label {
+    margin-bottom: 8px;
+    color: #aaa;
+}
+
+.id-card .qr img {
+    border: 5px solid white;
+    border-radius: 8px;
+}
+
+.not-allotted-label {
+    color: #f87171;
+}
+
 .review-grid {
     display: grid;
     grid-template-columns: 340px 1fr;
@@ -516,6 +648,16 @@ html, body {
 @media (max-width: 992px) {
     .review-grid {
         grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 480px) {
+    .student-view-card {
+        padding: 25px 20px;
+    }
+
+    .student-view-card h1 {
+        font-size: 1.3rem;
     }
 }
 

@@ -13,40 +13,50 @@ $selected_status = isset($_GET['status']) ? trim($_GET['status']) : 'Approved';
 $search_query = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 $where_clauses = [];
+$filter_types = '';
+$filter_values = [];
 
 if ($selected_course !== 'all' && $selected_course !== '') {
-    $safe_course = mysqli_real_escape_string($conn, $selected_course);
-    $where_clauses[] = "course = '$safe_course'";
+    $where_clauses[] = 'course = ?';
+    $filter_types .= 's';
+    $filter_values[] = $selected_course;
 }
 
 if ($selected_sem !== 'all' && $selected_sem !== '') {
-    $safe_sem = (int)$selected_sem;
-    $where_clauses[] = "semester = $safe_sem";
+    $where_clauses[] = 'semester = ?';
+    $filter_types .= 'i';
+    $filter_values[] = (int)$selected_sem;
 }
 
 if ($selected_section === 'unassigned') {
     $where_clauses[] = "(section IS NULL OR section = '' OR section = 'Unassigned')";
 } elseif ($selected_section !== 'all' && $selected_section !== '') {
-    $safe_sec = mysqli_real_escape_string($conn, $selected_section);
-    $where_clauses[] = "section = '$safe_sec'";
+    $where_clauses[] = 'section = ?';
+    $filter_types .= 's';
+    $filter_values[] = $selected_section;
 }
 
 if ($selected_status !== 'all' && $selected_status !== '') {
-    $safe_status = mysqli_real_escape_string($conn, $selected_status);
-    $where_clauses[] = "status = '$safe_status'";
+    $where_clauses[] = 'status = ?';
+    $filter_types .= 's';
+    $filter_values[] = $selected_status;
 }
 
 if ($search_query !== '') {
-    $safe_search = mysqli_real_escape_string($conn, $search_query);
-    $where_clauses[] = "(full_name LIKE '%$safe_search%' OR student_id LIKE '%$safe_search%' OR email LIKE '%$safe_search%')";
+    $where_clauses[] = "(full_name LIKE ? OR student_id LIKE ? OR email LIKE ?)";
+    $search_pattern = '%' . $search_query . '%';
+    $filter_types .= 'sss';
+    array_push($filter_values, $search_pattern, $search_pattern, $search_pattern);
 }
 
 $where_sql = count($where_clauses) > 0 ? ' WHERE ' . implode(' AND ', $where_clauses) : '';
 $student_query = "SELECT * FROM students $where_sql ORDER BY course ASC, semester ASC, section ASC, student_id ASC, id DESC";
-$result = mysqli_query($conn, $student_query);
+$student_stmt = execute_prepared_query($conn, $student_query, $filter_types, $filter_values);
+$result = $student_stmt->get_result();
 
 if (isset($_GET['export']) && $_GET['export'] === 'excel') {
-    $export_result = mysqli_query($conn, $student_query);
+    $export_stmt = execute_prepared_query($conn, $student_query, $filter_types, $filter_values);
+    $export_result = $export_stmt->get_result();
     $filename = 'student_export_' . date('Ymd_His') . '.xls';
 
     header('Content-Type: application/vnd.ms-excel; charset=utf-8');
@@ -64,7 +74,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
             $clean = str_replace(["\r", "\n", "\t"], [' ', ' ', ' '], $str);
             if ($clean === '') {
                 $excel_safe[] = '';
-            } elseif (preg_match('/^(\d{7,15}|\d{1,3}(?:,\d{3})+|\d+\.?\d*)$/', $clean) || preg_match('/^\+?\d[\d\s\-()]+$/', $clean)) {
+            } elseif (preg_match('/^[=+\-@]/', $clean) || preg_match('/^(\d{7,15}|\d{1,3}(?:,\d{3})+|\d+\.?\d*)$/', $clean) || preg_match('/^\+?\d[\d\s\-()]+$/', $clean)) {
                 $excel_safe[] = "'" . $clean;
             } else {
                 $excel_safe[] = $clean;
@@ -398,8 +408,8 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
     <div class="stats-bar">
         <?php
         $count_sql = "SELECT COUNT(*) as total FROM students" . ($where_sql ?: '');
-        $count_result = mysqli_query($conn, $count_sql);
-        $count_row = $count_result ? mysqli_fetch_assoc($count_result) : ['total' => 0];
+        $count_stmt = execute_prepared_query($conn, $count_sql, $filter_types, $filter_values);
+        $count_row = $count_stmt->get_result()->fetch_assoc() ?: ['total' => 0];
         ?>
         <div class="stat-card">
             <span class="label">Total Listed</span>

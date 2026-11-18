@@ -9,12 +9,16 @@ if (!isset($_SESSION['student_id'])) {
 $student_id = $_SESSION['student_id'];
 $name = $_SESSION['student_name'];
 
-$stu_res = mysqli_query($conn, "SELECT course, semester, section FROM students WHERE student_id = '$student_id'");
-$stu_info = $stu_res ? mysqli_fetch_assoc($stu_res) : ['course' => '', 'semester' => 1, 'section' => ''];
+$stu_stmt = $conn->prepare("SELECT course, semester, section FROM students WHERE student_id = ? LIMIT 1");
+$stu_stmt->bind_param('s', $student_id);
+$stu_stmt->execute();
+$stu_info = $stu_stmt->get_result()->fetch_assoc() ?: ['course' => '', 'semester' => 1, 'section' => ''];
 
 // Fetch marks
-$query = "SELECT * FROM marks WHERE student_id = '$student_id' ORDER BY subject";
-$result = mysqli_query($conn, $query);
+$stmt = $conn->prepare("SELECT * FROM marks WHERE student_id = ? ORDER BY subject");
+$stmt->bind_param('s', $student_id);
+$stmt->execute();
+$result = $stmt->get_result();
 ?>
 
 <!DOCTYPE html>

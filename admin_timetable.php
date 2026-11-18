@@ -8,79 +8,81 @@ if (!isset($_SESSION['admin'])) {
 
 $message = "";
 
-// ========== CREATE TABLES IF NOT EXISTS ==========
-mysqli_query($conn, "CREATE TABLE IF NOT EXISTS time_slots (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    slot_name VARCHAR(50) NOT NULL
-)");
-
-mysqli_query($conn, "CREATE TABLE IF NOT EXISTS teachers (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    teacher_name VARCHAR(100) NOT NULL
-)");
-
-mysqli_query($conn, "CREATE TABLE IF NOT EXISTS subjects (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    subject_name VARCHAR(100) NOT NULL
-)");
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !verify_csrf_token($_POST['csrf_token'] ?? '')) {
+    http_response_code(400);
+    exit('Invalid security token. Please reload the page and try again.');
+}
 
 // ========== ADD TIME SLOT ==========
 if (isset($_POST['add_slot'])) {
-    $slot = trim($_POST['new_slot']);
+    $slot = trim($_POST['new_slot'] ?? '');
     if ($slot != "") {
-        mysqli_query($conn, "INSERT INTO time_slots (slot_name) VALUES ('$slot')");
+        $stmt = $conn->prepare("INSERT INTO time_slots (slot_name) VALUES (?)");
+        $stmt->bind_param('s', $slot);
+        $stmt->execute();
         $message = "Time slot added!";
     }
 }
 
 // ========== DELETE TIME SLOT ==========
-if (isset($_GET['delete_slot'])) {
-    $id = intval($_GET['delete_slot']);
-    mysqli_query($conn, "DELETE FROM time_slots WHERE id = $id");
+if (isset($_POST['delete_slot'])) {
+    $id = (int)$_POST['delete_slot'];
+    $stmt = $conn->prepare("DELETE FROM time_slots WHERE id = ?");
+    $stmt->bind_param('i', $id);
+    $stmt->execute();
     header("Location: admin_timetable.php");
     exit();
 }
 
 // ========== ADD TEACHER ==========
 if (isset($_POST['add_teacher'])) {
-    $teacher = trim($_POST['new_teacher']);
+    $teacher = trim($_POST['new_teacher'] ?? '');
     if ($teacher != "") {
-        mysqli_query($conn, "INSERT INTO teachers (teacher_name) VALUES ('$teacher')");
+        $stmt = $conn->prepare("INSERT INTO teachers (teacher_name) VALUES (?)");
+        $stmt->bind_param('s', $teacher);
+        $stmt->execute();
         $message = "Teacher added!";
     }
 }
 
 // ========== DELETE TEACHER ==========
-if (isset($_GET['delete_teacher'])) {
-    $id = intval($_GET['delete_teacher']);
-    mysqli_query($conn, "DELETE FROM teachers WHERE id = $id");
+if (isset($_POST['delete_teacher'])) {
+    $id = (int)$_POST['delete_teacher'];
+    $stmt = $conn->prepare("DELETE FROM teachers WHERE id = ?");
+    $stmt->bind_param('i', $id);
+    $stmt->execute();
     header("Location: admin_timetable.php");
     exit();
 }
 
 // ========== ADD SUBJECT ==========
 if (isset($_POST['add_subject'])) {
-    $subject = trim($_POST['new_subject']);
+    $subject = trim($_POST['new_subject'] ?? '');
     if ($subject != "") {
-        mysqli_query($conn, "INSERT INTO subjects (subject_name) VALUES ('$subject')");
+        $stmt = $conn->prepare("INSERT INTO subjects (subject_name) VALUES (?)");
+        $stmt->bind_param('s', $subject);
+        $stmt->execute();
         $message = "Subject added!";
     }
 }
 
 // ========== DELETE SUBJECT ==========
-if (isset($_GET['delete_subject'])) {
-    $id = intval($_GET['delete_subject']);
-    mysqli_query($conn, "DELETE FROM subjects WHERE id = $id");
+if (isset($_POST['delete_subject'])) {
+    $id = (int)$_POST['delete_subject'];
+    $stmt = $conn->prepare("DELETE FROM subjects WHERE id = ?");
+    $stmt->bind_param('i', $id);
+    $stmt->execute();
     header("Location: admin_timetable.php");
     exit();
 }
 
 // ========== SAVE TIMETABLE ==========
 if (isset($_POST['save_timetable'])) {
-    mysqli_query($conn, "DELETE FROM timetable");
+    $conn->query("DELETE FROM timetable");
 
     $days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    $slots_result = mysqli_query($conn, "SELECT * FROM time_slots ORDER BY id");
+    $slots_result = $conn->query("SELECT * FROM time_slots ORDER BY id");
+    $insert = $conn->prepare("INSERT INTO timetable (day, time_slot, subject, teacher) VALUES (?, ?, ?, ?)");
 
     while ($slot_row = mysqli_fetch_assoc($slots_result)) {
         $slot = $slot_row['slot_name'];
@@ -90,8 +92,8 @@ if (isset($_POST['save_timetable'])) {
             $teacher = $_POST['teacher'][$key] ?? '';
 
             if ($subject != "") {
-                mysqli_query($conn, "INSERT INTO timetable (day, time_slot, subject, teacher) 
-                                     VALUES ('$day', '$slot', '$subject', '$teacher')");
+                $insert->bind_param('ssss', $day, $slot, $subject, $teacher);
+                $insert->execute();
             }
         }
     }
@@ -99,13 +101,13 @@ if (isset($_POST['save_timetable'])) {
 }
 
 // Fetch data
-$slots = mysqli_query($conn, "SELECT * FROM time_slots ORDER BY id");
-$teachers_list = mysqli_query($conn, "SELECT * FROM teachers ORDER BY teacher_name");
-$subjects_list = mysqli_query($conn, "SELECT * FROM subjects ORDER BY subject_name");
+$slots = $conn->query("SELECT * FROM time_slots ORDER BY id");
+$teachers_list = $conn->query("SELECT * FROM teachers ORDER BY teacher_name");
+$subjects_list = $conn->query("SELECT * FROM subjects ORDER BY subject_name");
 
 // Existing timetable
 $existing = [];
-$res = mysqli_query($conn, "SELECT * FROM timetable");
+$res = $conn->query("SELECT * FROM timetable");
 while ($row = mysqli_fetch_assoc($res)) {
     $existing[$row['day'] . "_" . $row['time_slot']] = $row;
 }
@@ -157,13 +159,14 @@ $days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     </div>
 
     <?php if ($message) { ?>
-        <div class="message"><?php echo $message; ?></div>
+        <div class="message"><?php echo htmlspecialchars($message); ?></div>
     <?php } ?>
 
     <!-- 1. Manage Time Slots -->
     <div class="section">
         <h3>1. Manage Time Slots (Periods)</h3>
         <form method="POST" class="flex">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
             <input type="text" name="new_slot" placeholder="Example: 09:00 AM - 10:00 AM" required>
             <button type="submit" name="add_slot">Add Time Slot</button>
         </form>
@@ -173,7 +176,10 @@ $days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
             while ($s = mysqli_fetch_assoc($slots)) { ?>
                 <div>
                     <?php echo htmlspecialchars($s['slot_name']); ?>
-                    <a href="?delete_slot=<?php echo $s['id']; ?>" class="delete-btn" onclick="return confirm('Delete this time slot?')">Delete</a>
+                    <form method="POST" class="inline-action-form" onsubmit="return confirm('Delete this time slot?')">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                        <button type="submit" name="delete_slot" value="<?php echo (int)$s['id']; ?>" class="delete-btn">Delete</button>
+                    </form>
                 </div>
             <?php } ?>
         </div>
@@ -183,6 +189,7 @@ $days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     <div class="section">
         <h3>2. Manage Teachers</h3>
         <form method="POST" class="flex">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
             <input type="text" name="new_teacher" placeholder="Teacher Name" required>
             <button type="submit" name="add_teacher">Add Teacher</button>
         </form>
@@ -192,7 +199,10 @@ $days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
             while ($t = mysqli_fetch_assoc($teachers_list)) { ?>
                 <div>
                     <?php echo htmlspecialchars($t['teacher_name']); ?>
-                    <a href="?delete_teacher=<?php echo $t['id']; ?>" class="delete-btn" onclick="return confirm('Delete this teacher?')">Delete</a>
+                    <form method="POST" class="inline-action-form" onsubmit="return confirm('Delete this teacher?')">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                        <button type="submit" name="delete_teacher" value="<?php echo (int)$t['id']; ?>" class="delete-btn">Delete</button>
+                    </form>
                 </div>
             <?php } ?>
         </div>
@@ -202,6 +212,7 @@ $days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     <div class="section">
         <h3>3. Manage Subjects</h3>
         <form method="POST" class="flex">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
             <input type="text" name="new_subject" placeholder="Subject Name (e.g. Break, Web Development)" required>
             <button type="submit" name="add_subject">Add Subject</button>
         </form>
@@ -211,7 +222,10 @@ $days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
             while ($sub = mysqli_fetch_assoc($subjects_list)) { ?>
                 <div>
                     <?php echo htmlspecialchars($sub['subject_name']); ?>
-                    <a href="?delete_subject=<?php echo $sub['id']; ?>" class="delete-btn" onclick="return confirm('Delete this subject?')">Delete</a>
+                    <form method="POST" class="inline-action-form" onsubmit="return confirm('Delete this subject?')">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                        <button type="submit" name="delete_subject" value="<?php echo (int)$sub['id']; ?>" class="delete-btn">Delete</button>
+                    </form>
                 </div>
             <?php } ?>
         </div>
@@ -221,6 +235,7 @@ $days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     <div class="section">
         <h3>4. Weekly Timetable Grid</h3>
         <form method="POST">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
             <table>
                 <tr>
                     <th>Time / Day</th>

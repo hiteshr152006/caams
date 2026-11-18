@@ -11,7 +11,7 @@ $message_type = "message";
 
 // Get subjects from subjects table if available, else default list
 $db_subjects = [];
-$sub_query = mysqli_query($conn, "SELECT subject_name FROM subjects ORDER BY subject_name");
+$sub_query = $conn->query("SELECT subject_name FROM subjects ORDER BY subject_name");
 if ($sub_query && mysqli_num_rows($sub_query) > 0) {
     while ($s_row = mysqli_fetch_assoc($sub_query)) {
         $db_subjects[] = $s_row['subject_name'];
@@ -36,66 +36,87 @@ $selected_subject = isset($_REQUEST['subject']) ? trim($_REQUEST['subject']) : '
 
 // When attendance form is submitted
 if (isset($_POST['submit_attendance'])) {
-    $date = mysqli_real_escape_string($conn, $_POST['date']);
-    $subject = mysqli_real_escape_string($conn, $_POST['subject']);
+    $date = trim($_POST['date'] ?? '');
+    $subject = trim($_POST['subject'] ?? '');
     $statuses = isset($_POST['attendance_status']) ? $_POST['attendance_status'] : [];
 
-    $count_marked = 0;
-    foreach ($statuses as $student_id => $status) {
-        $safe_stu_id = mysqli_real_escape_string($conn, $student_id);
-        $safe_status = ($status === 'Absent') ? 'Absent' : 'Present';
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $message = "Invalid security token. Please refresh the page and try again.";
+        $message_type = "error";
+    } elseif (
+        !($date_value = DateTime::createFromFormat('!Y-m-d', $date)) ||
+        $date_value->format('Y-m-d') !== $date ||
+        $subject === '' ||
+        !is_array($statuses)
+    ) {
+        $message = "Please provide a valid date, subject, and attendance list.";
+        $message_type = "error";
+    } else {
+        $check = $conn->prepare("SELECT id FROM attendance WHERE student_id = ? AND date = ? AND subject = ? LIMIT 1");
+        $insert = $conn->prepare("INSERT INTO attendance (student_id, subject, date, status) VALUES (?, ?, ?, ?)");
+        $update = $conn->prepare("UPDATE attendance SET status = ? WHERE student_id = ? AND date = ? AND subject = ?");
+        $count_marked = 0;
+        foreach ($statuses as $student_id => $status) {
+            if (!ctype_digit((string)$student_id)) {
+                continue;
+            }
+            $safe_status = ($status === 'Absent') ? 'Absent' : 'Present';
+            $check->bind_param('sss', $student_id, $date, $subject);
+            $check->execute();
+            $existing = $check->get_result()->fetch_assoc();
 
-        // Check if attendance already exists for this student on this date and subject
-        $check = mysqli_query($conn, "SELECT id FROM attendance WHERE student_id='$safe_stu_id' AND date='$date' AND subject='$subject'");
-        
-        if (mysqli_num_rows($check) == 0) {
-            $sql = "INSERT INTO attendance (student_id, subject, date, status) 
-                    VALUES ('$safe_stu_id', '$subject', '$date', '$safe_status')";
-        } else {
-            $sql = "UPDATE attendance SET status='$safe_status' 
-                    WHERE student_id='$safe_stu_id' AND date='$date' AND subject='$subject'";
-        }
-        if (mysqli_query($conn, $sql)) {
+            if ($existing) {
+                $update->bind_param('ssss', $safe_status, $student_id, $date, $subject);
+                $update->execute();
+            } else {
+                $insert->bind_param('ssss', $student_id, $subject, $date, $safe_status);
+                $insert->execute();
+            }
             $count_marked++;
         }
+        $message = "Attendance saved successfully for $count_marked student(s) in $subject on $date.";
+        $message_type = "message";
     }
-    $message = "Attendance saved successfully for $count_marked student(s) in $subject on $date.";
-    $message_type = "message";
 }
 
 // Build query to fetch students matching selected Course, Sem, and Section
 $where_clauses = ["status = 'Approved'"];
+$filter_types = '';
+$filter_values = [];
 
 if ($selected_course !== 'all' && $selected_course !== '') {
-    $safe_course = mysqli_real_escape_string($conn, $selected_course);
-    $where_clauses[] = "course = '$safe_course'";
+    $where_clauses[] = 'course = ?';
+    $filter_types .= 's';
+    $filter_values[] = $selected_course;
 }
 
 if ($selected_sem !== 'all' && $selected_sem !== '') {
-    $safe_sem = (int)$selected_sem;
-    $where_clauses[] = "semester = $safe_sem";
+    $where_clauses[] = 'semester = ?';
+    $filter_types .= 'i';
+    $filter_values[] = (int)$selected_sem;
 }
 
 if ($selected_section === 'unassigned') {
     $where_clauses[] = "(section IS NULL OR section = '' OR section = 'Unassigned')";
 } elseif ($selected_section !== 'all' && $selected_section !== '') {
-    $safe_sec = mysqli_real_escape_string($conn, $selected_section);
-    $where_clauses[] = "section = '$safe_sec'";
+    $where_clauses[] = 'section = ?';
+    $filter_types .= 's';
+    $filter_values[] = $selected_section;
 }
 
 $where_sql = "WHERE " . implode(" AND ", $where_clauses);
-$students = mysqli_query($conn, "SELECT * FROM students $where_sql ORDER BY course ASC, semester ASC, section ASC, student_id ASC");
+$students_stmt = execute_prepared_query($conn, "SELECT * FROM students $where_sql ORDER BY course ASC, semester ASC, section ASC, student_id ASC", $filter_types, $filter_values);
+$students = $students_stmt->get_result();
 
 // Fetch existing attendance for the selected date and subject to pre-populate
 $existing_attendance = [];
 if (!empty($selected_date) && !empty($selected_subject)) {
-    $safe_d = mysqli_real_escape_string($conn, $selected_date);
-    $safe_s = mysqli_real_escape_string($conn, $selected_subject);
-    $att_res = mysqli_query($conn, "SELECT student_id, status FROM attendance WHERE date='$safe_d' AND subject='$safe_s'");
-    if ($att_res) {
-        while ($att_row = mysqli_fetch_assoc($att_res)) {
-            $existing_attendance[$att_row['student_id']] = $att_row['status'];
-        }
+    $att_stmt = $conn->prepare("SELECT student_id, status FROM attendance WHERE date = ? AND subject = ?");
+    $att_stmt->bind_param('ss', $selected_date, $selected_subject);
+    $att_stmt->execute();
+    $att_res = $att_stmt->get_result();
+    while ($att_row = $att_res->fetch_assoc()) {
+        $existing_attendance[$att_row['student_id']] = $att_row['status'];
     }
 }
 ?>
@@ -431,6 +452,7 @@ if (!empty($selected_date) && !empty($selected_subject)) {
     if ($total_students > 0) {
     ?>
         <form method="POST" action="admin_attendance.php?course=<?php echo urlencode($selected_course); ?>&sem=<?php echo urlencode($selected_sem); ?>&section=<?php echo urlencode($selected_section); ?>&date=<?php echo urlencode($selected_date); ?>&subject=<?php echo urlencode($selected_subject); ?>">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
             <input type="hidden" name="date" value="<?php echo htmlspecialchars($selected_date); ?>">
             <input type="hidden" name="subject" value="<?php echo htmlspecialchars($selected_subject); ?>">
 

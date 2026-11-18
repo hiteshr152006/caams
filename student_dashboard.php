@@ -10,15 +10,18 @@ $student_id = $_SESSION['student_id'];
 $name = $_SESSION['student_name'];
 
 // Get student details
-$sql = "SELECT * FROM students WHERE student_id = '$student_id'";
-$result = mysqli_query($conn, $sql);
-$student = mysqli_fetch_assoc($result);
+$stmt = $conn->prepare("SELECT * FROM students WHERE student_id = ? LIMIT 1");
+$stmt->bind_param('s', $student_id);
+$stmt->execute();
+$student = $stmt->get_result()->fetch_assoc();
 
-// QR Code URL (points to a public view page)
-$qr_data = "http:// 192.168.0.104/college_system/student_view.php?id=" . $student_id;
-// If your folder is collage_system, change the above URL accordingly
+if (!$student) {
+    http_response_code(404);
+    exit('Student record not found.');
+}
 
-$qr_url = "https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=" . urlencode($qr_data);
+$student_view_url = get_app_base_url() . '/student_view.php?id=' . rawurlencode($student_id);
+$qr_url = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' . rawurlencode($student_view_url);
 ?>
 
 <!DOCTYPE html>
@@ -109,15 +112,6 @@ $qr_url = "https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=" . url
             color: #fff;
         }
 
-        /* Digital ID Card Style */
-        .id-card {
-            width: 350px;
-            max-width: 100%;
-            text-align: center;
-            background: linear-gradient(145deg, #1a1a1a, #111);
-            border: 2px solid #00d4ff;
-        }
-
         @media (max-width: 768px) {
             body {
                 padding: 12px 10px !important;
@@ -148,30 +142,6 @@ $qr_url = "https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=" . url
                 min-width: 0 !important;
             }
         }
-        .id-card img.photo {
-            width: 110px;
-            height: 110px;
-            border-radius: 10px;
-            object-fit: cover;
-            border: 3px solid #00d4ff;
-            margin-bottom: 15px;
-        }
-        .id-card h3 {
-            color: #00d4ff;
-            margin-bottom: 5px;
-        }
-        .id-card p {
-            color: #ccc;
-            margin: 4px 0;
-            font-size: 0.95rem;
-        }
-        .qr {
-            margin-top: 20px;
-        }
-        .qr img {
-            border: 5px solid white;
-            border-radius: 8px;
-        }
     </style>
 </head>
 <body>
@@ -192,7 +162,7 @@ $qr_url = "https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=" . url
         <!-- Profile Info -->
         <div class="info-card">
             <h2>Student Profile</h2>
-            <p><strong>Student ID:</strong> <?php echo $student['student_id']; ?></p>
+            <p><strong>Student ID:</strong> <?php echo htmlspecialchars($student['student_id']); ?></p>
             <p><strong>Full Name:</strong> <?php echo htmlspecialchars($student['full_name']); ?></p>
             <p><strong>Email:</strong> <?php echo htmlspecialchars($student['email']); ?></p>
             <p><strong>Phone:</strong> <?php echo htmlspecialchars($student['phone']); ?></p>
@@ -227,22 +197,22 @@ $qr_url = "https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=" . url
             <h2>Digital ID Card</h2>
 
             <?php if (!empty($student['photo']) && file_exists($student['photo'])) { ?>
-                <img src="<?php echo $student['photo']; ?>" class="photo" alt="Student Photo">
+                <img src="<?php echo htmlspecialchars($student['photo']); ?>" class="photo" alt="Student Photo">
             <?php } else { ?>
-                <div style="width:110px; height:110px; background:#333; margin:0 auto 15px; border-radius:10px; line-height:110px; color:#777;">No Photo</div>
+                <div class="photo photo-placeholder">No Photo</div>
             <?php } ?>
 
             <h3><?php echo htmlspecialchars($student['full_name']); ?></h3>
-            <p><strong>ID:</strong> <?php echo $student['student_id']; ?></p>
+            <p><strong>ID:</strong> <?php echo htmlspecialchars($student['student_id']); ?></p>
             <p><strong>Course:</strong> <?php echo htmlspecialchars($student['course']); ?> • Sem <?php echo !empty($student['semester']) ? htmlspecialchars($student['semester']) : 1; ?></p>
             <p>
                 <strong>Section:</strong> 
-                <?php echo !empty($student['section']) ? 'Section ' . htmlspecialchars($student['section']) : '<span style="color:#f87171;">Not Allotted</span>'; ?>
+                <?php echo !empty($student['section']) ? 'Section ' . htmlspecialchars($student['section']) : '<span class="not-allotted-label">Not Allotted</span>'; ?>
             </p>
 
             <div class="qr">
-                <p style="margin-bottom:8px; color:#aaa;">Scan QR for Details</p>
-                <img src="<?php echo $qr_url; ?>" alt="QR Code">
+                <p class="qr-label">Scan QR for Details</p>
+                <img src="<?php echo htmlspecialchars($qr_url); ?>" alt="QR Code">
             </div>
         </div>
     </div>
